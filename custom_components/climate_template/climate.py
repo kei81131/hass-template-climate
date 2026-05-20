@@ -95,11 +95,16 @@ CONF_SET_FAN_MODE_ACTION = "set_fan_mode"
 CONF_SET_PRESET_MODE_ACTION = "set_preset_mode"
 CONF_SET_SWING_MODE_ACTION = "set_swing_mode"
 
+CONF_TURN_ON_MODE = "turn_on_mode"
+
 CONF_CLIMATES = "climates"
 
 DEFAULT_NAME = "Template Climate"
 DEFAULT_TEMP = 21
 DEFAULT_PRECISION = 1.0
+TURN_ON_MODE_DEFAULT = "default"
+TURN_ON_MODE_LAST = "last"
+ATTR_LAST_HVAC_MODE = "last_hvac_mode"
 DOMAIN = "climate_template"
 PLATFORMS = ["climate"]
 
@@ -129,6 +134,9 @@ PLATFORM_SCHEMA = cv.PLATFORM_SCHEMA.extend(
         vol.Optional(CONF_SET_FAN_MODE_ACTION): cv.SCRIPT_SCHEMA,
         vol.Optional(CONF_SET_PRESET_MODE_ACTION): cv.SCRIPT_SCHEMA,
         vol.Optional(CONF_SET_SWING_MODE_ACTION): cv.SCRIPT_SCHEMA,
+        vol.Optional(CONF_TURN_ON_MODE, default=TURN_ON_MODE_DEFAULT): vol.In(
+            [TURN_ON_MODE_DEFAULT, TURN_ON_MODE_LAST]
+        ),
         vol.Optional(
             CONF_MODE_LIST,
             default=[
@@ -208,6 +216,8 @@ class TemplateClimate(TemplateEntity, ClimateEntity, RestoreEntity):
         self._attr_fan_modes = config[CONF_FAN_MODE_LIST]
         self._attr_preset_modes = config[CONF_PRESET_MODE_LIST]
         self._attr_swing_modes = config[CONF_SWING_MODE_LIST]
+        self._turn_on_mode = config[CONF_TURN_ON_MODE]
+        self._last_hvac_mode: HVACMode | None = None
         # set optimistic default attrs
         self._attr_fan_mode = FAN_LOW
         self._attr_preset_mode = PRESET_COMFORT
@@ -358,6 +368,13 @@ class TemplateClimate(TemplateEntity, ClimateEntity, RestoreEntity):
 
             if humidity := previous_state.attributes.get(ATTR_HUMIDITY):
                 self._attr_target_humidity = humidity
+
+            if self._turn_on_mode == TURN_ON_MODE_LAST:
+                self._remember_last_hvac_mode(
+                    previous_state.attributes.get(ATTR_LAST_HVAC_MODE)
+                )
+                if self._last_hvac_mode is None:
+                    self._remember_last_hvac_mode(previous_state.state)
 
     @callback
     def _async_setup_templates(self) -> None:
@@ -596,10 +613,34 @@ class TemplateClimate(TemplateEntity, ClimateEntity, RestoreEntity):
             except ValueError:
                 _LOGGER.error("Could not parse temperature low from %s", temp)
 
+    def _coerce_hvac_mode(self, hvac_mode) -> HVACMode | None:
+        """Convert a HVAC mode value to HVACMode."""
+        if hvac_mode in (None, STATE_UNKNOWN, STATE_UNAVAILABLE):
+            return None
+
+        try:
+            return HVACMode(hvac_mode)
+        except ValueError:
+            return None
+
+    @callback
+    def _remember_last_hvac_mode(self, hvac_mode) -> None:
+        """Remember the last non-off HVAC mode."""
+        if self._turn_on_mode != TURN_ON_MODE_LAST:
+            return
+
+        hvac_mode = self._coerce_hvac_mode(hvac_mode)
+        if hvac_mode is None or hvac_mode == HVACMode.OFF:
+            return
+
+        if hvac_mode in self._attr_hvac_modes:
+            self._last_hvac_mode = hvac_mode
+
     @callback
     def _update_hvac_mode(self, hvac_mode):
         if hvac_mode in self._attr_hvac_modes:
             hvac_mode = HVACMode(hvac_mode) if hvac_mode else None
+            self._remember_last_hvac_mode(hvac_mode)
             if self._attr_hvac_mode != hvac_mode:  # Only update if there's a change
                 self._attr_hvac_mode = hvac_mode
                 self.async_write_ha_state()  # Update HA state without triggering an action
@@ -691,8 +732,42 @@ class TemplateClimate(TemplateEntity, ClimateEntity, RestoreEntity):
             else None
         )
 
+    @property
+    def extra_state_attributes(self):
+        """Return entity specific state attributes."""
+        attrs = dict(super().extra_state_attributes or {})
+
+        if (
+            self._turn_on_mode == TURN_ON_MODE_LAST
+            and self._last_hvac_mode is not None
+        ):
+            attrs[ATTR_LAST_HVAC_MODE] = self._last_hvac_mode.value
+
+        return attrs
+
+    async def async_turn_on(self) -> None:
+        """Turn on the climate device."""
+        if self._turn_on_mode != TURN_ON_MODE_LAST:
+            await super().async_turn_on()
+            return
+
+        if self._attr_hvac_mode != HVACMode.OFF:
+            return
+
+        if (
+            self._last_hvac_mode is not None
+            and self._last_hvac_mode != HVACMode.OFF
+            and self._last_hvac_mode in self._attr_hvac_modes
+        ):
+            await self.async_set_hvac_mode(self._last_hvac_mode)
+            return
+
+        await super().async_turn_on()
+
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set new operation mode."""
+        self._remember_last_hvac_mode(hvac_mode)
+
         if self._hvac_mode_template is None:
             self._attr_hvac_mode = hvac_mode  # always optimistic
             self.async_write_ha_state()
