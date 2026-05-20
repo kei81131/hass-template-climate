@@ -218,6 +218,7 @@ class TemplateClimate(TemplateEntity, ClimateEntity, RestoreEntity):
         self._attr_swing_modes = config[CONF_SWING_MODE_LIST]
         self._turn_on_mode = config[CONF_TURN_ON_MODE]
         self._last_hvac_mode: HVACMode | None = None
+        self._turning_off = False
         # set optimistic default attrs
         self._attr_fan_mode = FAN_LOW
         self._attr_preset_mode = PRESET_COMFORT
@@ -640,7 +641,14 @@ class TemplateClimate(TemplateEntity, ClimateEntity, RestoreEntity):
     def _update_hvac_mode(self, hvac_mode):
         if hvac_mode in self._attr_hvac_modes:
             hvac_mode = HVACMode(hvac_mode) if hvac_mode else None
-            self._remember_last_hvac_mode(hvac_mode)
+            if self._turning_off and hvac_mode != HVACMode.OFF:
+                pass
+            else:
+                self._remember_last_hvac_mode(hvac_mode)
+
+            if hvac_mode == HVACMode.OFF:
+                self._turning_off = False
+
             if self._attr_hvac_mode != hvac_mode:  # Only update if there's a change
                 self._attr_hvac_mode = hvac_mode
                 self.async_write_ha_state()  # Update HA state without triggering an action
@@ -751,6 +759,8 @@ class TemplateClimate(TemplateEntity, ClimateEntity, RestoreEntity):
             await super().async_turn_on()
             return
 
+        self._turning_off = False
+
         if self._attr_hvac_mode != HVACMode.OFF:
             return
 
@@ -766,7 +776,13 @@ class TemplateClimate(TemplateEntity, ClimateEntity, RestoreEntity):
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set new operation mode."""
-        self._remember_last_hvac_mode(hvac_mode)
+        coerced_hvac_mode = self._coerce_hvac_mode(hvac_mode)
+        if coerced_hvac_mode == HVACMode.OFF:
+            self._remember_last_hvac_mode(self._attr_hvac_mode)
+            self._turning_off = self._turn_on_mode == TURN_ON_MODE_LAST
+        else:
+            self._turning_off = False
+            self._remember_last_hvac_mode(coerced_hvac_mode)
 
         if self._hvac_mode_template is None:
             self._attr_hvac_mode = hvac_mode  # always optimistic
