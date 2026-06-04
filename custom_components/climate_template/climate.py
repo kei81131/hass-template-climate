@@ -94,6 +94,8 @@ CONF_SET_HVAC_MODE_ACTION = "set_hvac_mode"
 CONF_SET_FAN_MODE_ACTION = "set_fan_mode"
 CONF_SET_PRESET_MODE_ACTION = "set_preset_mode"
 CONF_SET_SWING_MODE_ACTION = "set_swing_mode"
+CONF_TURN_ON_ACTION = "turn_on"
+CONF_TURN_OFF_ACTION = "turn_off"
 
 CONF_TURN_ON_MODE = "turn_on_mode"
 
@@ -134,6 +136,8 @@ PLATFORM_SCHEMA = cv.PLATFORM_SCHEMA.extend(
         vol.Optional(CONF_SET_FAN_MODE_ACTION): cv.SCRIPT_SCHEMA,
         vol.Optional(CONF_SET_PRESET_MODE_ACTION): cv.SCRIPT_SCHEMA,
         vol.Optional(CONF_SET_SWING_MODE_ACTION): cv.SCRIPT_SCHEMA,
+        vol.Optional(CONF_TURN_ON_ACTION): cv.SCRIPT_SCHEMA,
+        vol.Optional(CONF_TURN_OFF_ACTION): cv.SCRIPT_SCHEMA,
         vol.Optional(CONF_TURN_ON_MODE, default=TURN_ON_MODE_DEFAULT): vol.In(
             [TURN_ON_MODE_DEFAULT, TURN_ON_MODE_LAST]
         ),
@@ -273,6 +277,20 @@ class TemplateClimate(TemplateEntity, ClimateEntity, RestoreEntity):
             self._set_hvac_mode_script = Script(
                 hass, set_hvac_mode_action, self._attr_name, DOMAIN
             )
+
+        self._turn_on_script = None
+        if turn_on_action := config.get(CONF_TURN_ON_ACTION):
+            self._turn_on_script = Script(
+                hass, turn_on_action, self._attr_name, DOMAIN
+            )
+            self._attr_supported_features |= ClimateEntityFeature.TURN_ON
+
+        self._turn_off_script = None
+        if turn_off_action := config.get(CONF_TURN_OFF_ACTION):
+            self._turn_off_script = Script(
+                hass, turn_off_action, self._attr_name, DOMAIN
+            )
+            self._attr_supported_features |= ClimateEntityFeature.TURN_OFF
 
         self._set_swing_mode_script = None
         if set_swing_mode_action := config.get(CONF_SET_SWING_MODE_ACTION):
@@ -755,6 +773,15 @@ class TemplateClimate(TemplateEntity, ClimateEntity, RestoreEntity):
 
     async def async_turn_on(self) -> None:
         """Turn on the climate device."""
+        if self._turn_on_script:
+            self._turning_off = False
+            await self.async_run_script(
+                self._turn_on_script,
+                run_variables={},
+                context=self._context,
+            )
+            return
+
         if self._turn_on_mode != TURN_ON_MODE_LAST:
             await super().async_turn_on()
             return
@@ -773,6 +800,20 @@ class TemplateClimate(TemplateEntity, ClimateEntity, RestoreEntity):
             return
 
         await super().async_turn_on()
+
+    async def async_turn_off(self) -> None:
+        """Turn off the climate device."""
+        if self._turn_off_script:
+            self._remember_last_hvac_mode(self._attr_hvac_mode)
+            self._turning_off = self._turn_on_mode == TURN_ON_MODE_LAST
+            await self.async_run_script(
+                self._turn_off_script,
+                run_variables={},
+                context=self._context,
+            )
+            return
+
+        await super().async_turn_off()
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set new operation mode."""
