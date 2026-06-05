@@ -13,8 +13,7 @@ This fork only adds `turn_on` action.
 | --- | --- |
 | `turn_on` | Runs when `climate.turn_on` is called, or when `climate.toggle` turns the entity on. |
 
-When `turn_on` is configured, it only power on the climate entity with last HVAC mode and  
-does not force a new HVAC mode.
+When `turn_on` is configured, it only power on the climate entity and does not force a new HVAC mode.
 
 ## Example
 
